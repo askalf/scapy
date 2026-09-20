@@ -592,6 +592,55 @@ with no_debug_dissector():
 
 assert pkt[UDP].chksum == 0x79dc
 
+= UDP checksum covers the inner padding but not the trailer of the outer frame
+~ udp
+# Both kinds of padding at once: the inner Ethernet frame is padded inside the
+# datagram, the outer Ethernet frame has a trailer outside of it.
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = Ether(raw(Ether(dst="00:11:22:33:44:55", src="66:77:88:99:aa:bb")/IP(src="1.2.3.4", dst="5.6.7.8")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)) + b"TTTTTTTTTTTTTTTT")
+assert pkt[UDP].len == 45 and len([x for x in pkt.iterpayloads() if isinstance(x, Padding)]) == 2
+del pkt[UDP].chksum
+assert Ether(raw(pkt))[UDP].chksum == 0x94fb
+
+= UDP checksum covers the padding of an encapsulated layer - IPv6 extension header
+~ udp
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IPv6(raw(IPv6(src="2001:db8::1", dst="2001:db8::2")/IPv6ExtHdrDestOpt()/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+assert isinstance(pkt[UDP].underlayer, IPv6ExtHdrDestOpt)
+assert pkt[UDP].chksum == 0x499a
+del pkt[UDP].chksum
+assert IPv6(raw(pkt))[UDP].chksum == 0x499a
+
+= UDP checksum with a len field covering only a part of the padding
+~ udp
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IP(raw(IP(src="1.2.3.4", dst="5.6.7.8")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+# One single byte of the padding is inside the datagram
+pkt[UDP].len = 38
+del pkt[UDP].chksum
+with no_debug_dissector():
+    assert IP(raw(pkt))[UDP].chksum == 0xd5f3
+
+= UDP checksum with a len field claiming more padding than the capture holds
+~ udp
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IP(raw(IP(src="1.2.3.4", dst="5.6.7.8")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+pkt[UDP].len = 49
+del pkt[UDP].chksum
+with no_debug_dissector():
+    assert IP(raw(pkt))[UDP].chksum == 0x94f7
+
+= UDP checksum with a len field below the payload while padding follows (control)
+~ udp
+# The len field is not an authority to remove data, only to add padding: the
+# checksum must be the one of the payload that is built.
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IP(raw(IP(src="1.2.3.4", dst="5.6.7.8")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+pkt[UDP].len = 36
+del pkt[UDP].chksum
+with no_debug_dissector():
+    assert IP(raw(pkt))[UDP].chksum == 0xd645
+
 = IP with forced-length 0
 p = IP()/TCP()
 p[IP].len = 0
