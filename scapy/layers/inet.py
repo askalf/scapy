@@ -843,14 +843,22 @@ class UDP(Packet):
             tmp_len = len(p)
             p = p[:4] + struct.pack("!H", tmp_len) + p[6:]
         if self.chksum is None:
+            # A Padding layer that belongs to an encapsulated protocol (for
+            # instance Ethernet over VXLAN) is data as far as UDP is
+            # concerned. The len field tells how many of the following
+            # padding bytes are inside the datagram, the remaining ones
+            # being padding of an under layer.
+            ck_p = p
+            if tmp_len > len(p):
+                ck_p += self.payload.build_padding()[:tmp_len - len(p)]
             if isinstance(self.underlayer, IP):
-                ck = in4_chksum(socket.IPPROTO_UDP, self.underlayer, p)
+                ck = in4_chksum(socket.IPPROTO_UDP, self.underlayer, ck_p)
                 # According to RFC768 if the result checksum is 0, it should be set to 0xFFFF  # noqa: E501
                 if ck == 0:
                     ck = 0xFFFF
                 p = p[:6] + struct.pack("!H", ck) + p[8:]
             elif isinstance(self.underlayer, scapy.layers.inet6.IPv6) or isinstance(self.underlayer, scapy.layers.inet6._IPv6ExtHdr):  # noqa: E501
-                ck = scapy.layers.inet6.in6_chksum(socket.IPPROTO_UDP, self.underlayer, p)  # noqa: E501
+                ck = scapy.layers.inet6.in6_chksum(socket.IPPROTO_UDP, self.underlayer, ck_p)  # noqa: E501
                 # According to RFC2460 if the result checksum is 0, it should be set to 0xFFFF  # noqa: E501
                 if ck == 0:
                     ck = 0xFFFF

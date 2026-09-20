@@ -543,6 +543,55 @@ assert bpkt.chksum == 0x70bd and bpkt.payload.chksum == 0xbb17
 
 conf.debug_dissector = True
 
+= UDP checksum covers the padding of an encapsulated layer
+~ udp
+# The Padding of an inner Ethernet frame is data for the outer UDP layer.
+# GH#4906: Ether / Dot1Q / IPv6 / UDP / VXLAN / Dot3 / LLC / data / Padding
+pkt_data = bytes.fromhex("ffffffffffffffffffffffff8100000086dd60000000010e1100000000000000000000000000000000000000000000000000000000000000000018bd2118010e01a8738a32362d5473c879f89f16a8f9cd673fec8d6b000d9a2976054be71268024a7817f64d63fad1d4eb2db918f004c198dc03e7ec4e836ca554e1b4f0c157c61728ae722bd55eac05d698f04a0df32b8d21f031ae70a7ad530d027915763af0e736fa6d61a334289b3aef64855b44ed09f02de48485a3337575d409561fe192bca02214a8a5b10cc66c756992eadaeaf56f8eeeb58c18cce9f36fd8983ff7890dedc28ed254080c180231440188d5afc32bff2193a8f94a1b683b1e850a613eaf42ccd37e5af706d93b11e31649a1b9f39c613ce5a4263fcfe7873da6fdd9d09c90f15b687efc3342189cbac70ab686d1dc5f000015128c4d3400080000034584f14d8e217811d6cee444")
+pkt = Ether(pkt_data)
+assert pkt[UDP].chksum == 0x1a8
+del pkt[UDP].chksum
+assert Ether(raw(pkt))[UDP].chksum == 0x1a8
+
+= UDP checksum covers the padding of an encapsulated layer - IPv4
+~ udp
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IP(raw(IP(src="1.2.3.4", dst="5.6.7.8")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+assert isinstance(pkt[LLC].payload.payload, Padding)
+assert pkt[UDP].chksum == 0x94fb
+del pkt[UDP].chksum
+assert IP(raw(pkt))[UDP].chksum == 0x94fb
+
+= UDP checksum covers the padding of an encapsulated layer - IPv6
+~ udp
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IPv6(raw(IPv6(src="2001:db8::1", dst="2001:db8::2")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+assert pkt[UDP].chksum == 0x499a
+del pkt[UDP].chksum
+assert IPv6(raw(pkt))[UDP].chksum == 0x499a
+
+= UDP checksum ignores the padding of an under layer (control)
+~ udp
+# The trailer of the outer Ethernet frame is not part of the datagram
+pkt = Ether(raw(Ether(dst="00:11:22:33:44:55", src="66:77:88:99:aa:bb")/IP(src="1.2.3.4", dst="5.6.7.8")/UDP(sport=1, dport=2)/Raw(b"ab")) + b"\x00" * 16)
+assert pkt[UDP].len == 10 and isinstance(pkt[Raw].payload, Padding)
+del pkt[UDP].chksum
+assert Ether(raw(pkt))[UDP].chksum == 0x8e61
+
+= UDP checksum with a len field larger than the available data (control)
+~ udp
+with no_debug_dissector():
+    pkt = IP(raw(IP()/UDP(len=100)/Raw(b"AAAA")))
+
+assert pkt[UDP].chksum == 0x7e8f
+
+= UDP checksum with a len field smaller than the payload (control)
+~ udp
+with no_debug_dissector():
+    pkt = IP(raw(IP()/UDP(len=10)/Raw(b"AAAAAAAAAAAA")))
+
+assert pkt[UDP].chksum == 0x79dc
+
 = IP with forced-length 0
 p = IP()/TCP()
 p[IP].len = 0
