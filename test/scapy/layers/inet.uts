@@ -662,6 +662,97 @@ del pkt[UDP].chksum
 with no_debug_dissector():
     assert IP(raw(pkt))[UDP].chksum == 0xd645
 
+= UDP checksum with a len field one short of the whole padding
+~ udp
+# One byte of the inner padding is left out of the datagram by the len field.
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IP(raw(IP(src="1.2.3.4", dst="5.6.7.8")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+pkt[UDP].len = 44
+del pkt[UDP].chksum
+with no_debug_dissector():
+    assert IP(raw(pkt))[UDP].chksum == 0xe4fc
+
+= UDP checksum with a len field one short of the whole padding - IPv6
+~ udp
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IPv6(raw(IPv6(src="2001:db8::1", dst="2001:db8::2")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+pkt[UDP].len = 44
+del pkt[UDP].chksum
+with no_debug_dissector():
+    assert IPv6(raw(pkt))[UDP].chksum == 0x999c
+
+= UDP checksum with the maximum len field
+~ udp
+# 0xffff is the largest value the field holds: the slice bound is far past the
+# padding, which build_padding() then returns whole.
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IP(raw(IP(src="1.2.3.4", dst="5.6.7.8")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+pkt[UDP].len = 65535
+del pkt[UDP].chksum
+with no_debug_dissector():
+    assert IP(raw(pkt))[UDP].chksum == 0x9528
+
+= UDP checksum with the maximum len field - IPv6
+~ udp
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IPv6(raw(IPv6(src="2001:db8::1", dst="2001:db8::2")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+pkt[UDP].len = 65535
+del pkt[UDP].chksum
+with no_debug_dissector():
+    assert IPv6(raw(pkt))[UDP].chksum == 0x49c7
+
+= UDP checksum with a len field covering only a part of the padding - IPv6 extension header
+~ udp
+# The boundary lengths on the second operand of the under layer dispatch: an
+# extension header derives the pseudo header the same way IPv6 does.
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IPv6(raw(IPv6(src="2001:db8::1", dst="2001:db8::2")/IPv6ExtHdrDestOpt()/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+pkt[UDP].len = 38
+del pkt[UDP].chksum
+with no_debug_dissector():
+    assert IPv6(raw(pkt))[UDP].chksum == 0x8a99
+
+= UDP checksum with a len field reaching into the trailer of the outer frame
+~ udp
+# build_padding() walks every following Padding layer, so a len field larger
+# than the inner padding keeps taking bytes from the outer trailer.
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = Ether(raw(Ether(dst="00:11:22:33:44:55", src="66:77:88:99:aa:bb")/IP(src="1.2.3.4", dst="5.6.7.8")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)) + b"TTTTTTTTTTTTTTTT")
+assert pkt[UDP].payload.build_padding() == b"PPPPPPPP" + b"T" * 16
+pkt[UDP].len = 53
+del pkt[UDP].chksum
+with no_debug_dissector():
+    assert Ether(raw(pkt))[UDP].chksum == 0x43a2
+
+= UDP checksum with a len field past every padding layer available
+~ udp
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = Ether(raw(Ether(dst="00:11:22:33:44:55", src="66:77:88:99:aa:bb")/IP(src="1.2.3.4", dst="5.6.7.8")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)) + b"TTTTTTTTTTTTTTTT")
+pkt[UDP].len = 70
+del pkt[UDP].chksum
+with no_debug_dissector():
+    assert Ether(raw(pkt))[UDP].chksum == 0xf23f
+
+= UDP checksum with a len field equal to the payload while padding follows (control)
+~ udp
+# tmp_len == len(p) leaves the guard false: the padding stays out of the
+# checksum, as it does for a packet built from scratch.
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IP(raw(IP(src="1.2.3.4", dst="5.6.7.8")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+pkt[UDP].len = 37
+del pkt[UDP].chksum
+with no_debug_dissector():
+    assert IP(raw(pkt))[UDP].chksum == 0xd644
+
+= UDP checksum of a packet built from scratch with an explicit Padding (control)
+~ udp
+# Nothing changes when post_build() computes the len field itself: tmp_len is
+# then len(p) and the padding is outside of the datagram.
+pkt = IP(src="1.2.3.4", dst="5.6.7.8")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")/Padding(b"PPPPPPPP")
+bpkt = IP(raw(pkt))
+assert bpkt[UDP].len == 37
+assert bpkt[UDP].chksum == 0xd64c
+
 = IP with forced-length 0
 p = IP()/TCP()
 p[IP].len = 0
