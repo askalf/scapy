@@ -621,6 +621,18 @@ del pkt[UDP].chksum
 with no_debug_dissector():
     assert IP(raw(pkt))[UDP].chksum == 0xd5f3
 
+= UDP checksum with a len field covering only a part of the padding - IPv6
+~ udp
+# in6_chksum takes the length of the pseudo header from the buffer it is
+# given, where in4_chksum uses the one of the IP layer: both arms of the
+# dispatch need the padding bytes that the len field puts in the datagram.
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IPv6(raw(IPv6(src="2001:db8::1", dst="2001:db8::2")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+pkt[UDP].len = 38
+del pkt[UDP].chksum
+with no_debug_dissector():
+    assert IPv6(raw(pkt))[UDP].chksum == 0x8a99
+
 = UDP checksum with a len field claiming more padding than the capture holds
 ~ udp
 inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
@@ -629,6 +641,15 @@ pkt[UDP].len = 49
 del pkt[UDP].chksum
 with no_debug_dissector():
     assert IP(raw(pkt))[UDP].chksum == 0x94f7
+
+= UDP checksum with a len field claiming more padding than the capture holds - IPv6
+~ udp
+inner = raw(Dot3(dst="11:22:33:44:55:66", src="aa:bb:cc:dd:ee:ff", len=7)/LLC(dsap=0x06, ssap=0x06, ctrl=3)/Raw(b"abcd")) + b"PPPPPPPP"
+pkt = IPv6(raw(IPv6(src="2001:db8::1", dst="2001:db8::2")/UDP(sport=1111, dport=4789)/VXLAN(flags=0x08, vni=42)/Raw(inner)))
+pkt[UDP].len = 49
+del pkt[UDP].chksum
+with no_debug_dissector():
+    assert IPv6(raw(pkt))[UDP].chksum == 0x4996
 
 = UDP checksum with a len field below the payload while padding follows (control)
 ~ udp
